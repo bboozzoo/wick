@@ -69,12 +69,13 @@ var (
 	logJoinTime      = join.Flag("time", "Log session join time").Bool()
 	keepaliveJoin    = join.Flag("keepalive", "interval between websocket pings.").Default("0").Int()
 
-	subscribe             = kingpin.Command("subscribe", "Subscribe a topic.")
-	subscribeTopic        = subscribe.Arg("topic", "Topic to subscribe.").Required().String()
-	subscribeOptions      = subscribe.Flag("option", "Subscribe option. (May be provided multiple times)").Short('o').StringMap()
-	subscribePrintDetails = subscribe.Flag("details", "Print event details.").Bool()
-	logSubscribeTime      = subscribe.Flag("time", "Log time to join session and subscribe a topic.").Bool()
-	concurrentSubscribe   = subscribe.Flag("concurrency", "Subscribe to topic concurrently. "+
+	subscribe               = kingpin.Command("subscribe", "Subscribe a topic.")
+	subscribeTopic          = subscribe.Arg("topic", "Topic to subscribe.").Required().String()
+	subscribeOptions        = subscribe.Flag("option", "Subscribe option. (May be provided multiple times)").Short('o').StringMap()
+	subscribePrintDetails   = subscribe.Flag("details", "Print event details.").Bool()
+	subscribeExitAfterEvent = subscribe.Flag("exit", "Exit after receiving an event.").Bool()
+	logSubscribeTime        = subscribe.Flag("time", "Log time to join session and subscribe a topic.").Bool()
+	concurrentSubscribe     = subscribe.Flag("concurrency", "Subscribe to topic concurrently. "+
 		"Only effective when called with --parallel.").Default("1").Int()
 	subscribeSessionCount = subscribe.Flag("parallel", "Start requested number of wamp sessions").Default("1").Int()
 	keepaliveSubscribe    = subscribe.Flag("keepalive", "interval between websocket pings.").Default("0").Int()
@@ -295,11 +296,14 @@ func main() {
 			wp.StopWait()
 		}()
 
+		eventC := make(chan struct{})
 		wp := workerpool.New(*concurrentSubscribe)
 		for _, session := range sessions {
 			sess := session
 			wp.Submit(func() {
-				if err = core.Subscribe(sess, *subscribeTopic, *subscribeOptions, *subscribePrintDetails, *logSubscribeTime); err != nil {
+				err := core.Subscribe(sess, *subscribeTopic, *subscribeOptions,
+					*subscribePrintDetails, *logSubscribeTime, eventC)
+				if err != nil {
 					log.Fatalln(err)
 				}
 			})
@@ -311,6 +315,10 @@ func main() {
 		signal.Notify(sigChan, os.Interrupt)
 		for _, session := range sessions {
 			select {
+			case <-eventC:
+				if *subscribeExitAfterEvent {
+					return
+				}
 			case <-sigChan:
 				return
 			case <-session.Done():
